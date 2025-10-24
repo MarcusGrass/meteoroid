@@ -52,9 +52,7 @@ Or run directly:
 cargo r -r -p meteoroid -- -w ~/output-dir/meteorite-data -o ~/output-dir/meteorite-results --rustfmt-local-repo ~/code/rustfmt/ --rustfmt-upstream-repo ~/code/upstream-rustfmt/ --git-sync-max-concurrent 8 --max-crates 100 --analyze-max-concurrent $(nproc)
 ```
 
-`100` crates take about 3 minutes from a clean slate, subsequent runs don't require syncing crate metadata or cloning again, 
-an immediate second run takes about 30 seconds (both on my machine). And results in about 3.5G of occupied space in 
-the supplied workdir.
+`1000` crates takes about 15 minutes from a clean slate (on my machine with 16 git concurrent and 32 analysis concurrent), and leaves about `11G` of outputs in the workdir.
 
 ## How it works
 
