@@ -91,6 +91,13 @@ Or: Only local has a diff.
 10. If `ctrl-c` is hit one, the application will try to exit gracefully and write a report to disk before finishing.
 If hit twice, the application will try to immediately exit.
 
+### Analyzing results
+
+I have yet to figure out a good way of analyzing results at scale.
+A simple check is looking under `output-dir/diverged`, any files there contains a diverging diff that can 
+be examined to see if the change is acceptable. Pulling up all the diffs in one view and checking them off 
+one-by-one would be helpful.
+
 ## Caveats
 
 This is an extremely simple implementation, it works with some flaws, the biggest ones are:
