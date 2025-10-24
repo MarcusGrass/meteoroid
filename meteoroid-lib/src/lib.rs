@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod analyze;
-mod cargo;
 pub(crate) mod cmd;
 mod crates;
 pub(crate) mod error;
@@ -124,17 +123,15 @@ async fn exec_parallel(mut config: MeteroidConfig) -> anyhow::Result<()> {
 }
 
 async fn drain_analyses(
-    mut analysis_out_recv: tokio::sync::mpsc::Receiver<Vec<CrateAnalysis>>,
+    mut analysis_out_recv: tokio::sync::mpsc::Receiver<CrateAnalysis>,
     report: &mut AnalysisReport,
     write_outputs: bool,
     include_non_diverging: bool,
 ) {
     while let Some(next) = analysis_out_recv.recv().await {
-        for cr in next {
-            report
-                .add_result(cr, write_outputs, include_non_diverging)
-                .await;
-        }
+        report
+            .add_result(next, write_outputs, include_non_diverging)
+            .await;
     }
 }
 
@@ -180,7 +177,7 @@ async fn fetch_and_process_crates(
 #[allow(clippy::too_many_arguments)]
 async fn analysis_task(
     mut recv: tokio::sync::mpsc::Receiver<GitSyncedCrate>,
-    send: tokio::sync::mpsc::Sender<Vec<CrateAnalysis>>,
+    send: tokio::sync::mpsc::Sender<CrateAnalysis>,
     local_build_outputs: RustFmtBuildOutputs,
     upstream_build_outputs: RustFmtBuildOutputs,
     config: Option<String>,
@@ -212,15 +209,16 @@ async fn analysis_task(
 }
 
 async fn on_analysis(
-    value: Result<anyhow::Result<Vec<CrateAnalysis>>, tokio::task::JoinError>,
-    send: &tokio::sync::mpsc::Sender<Vec<CrateAnalysis>>,
+    value: Result<anyhow::Result<Option<CrateAnalysis>>, tokio::task::JoinError>,
+    send: &tokio::sync::mpsc::Sender<CrateAnalysis>,
 ) {
     match value {
-        Ok(Ok(res)) => {
+        Ok(Ok(Some(res))) => {
             if send.send(res).await.is_err() {
                 tracing::error!("analysis task sender was dropped, exiting");
             }
         }
+        Ok(Ok(None)) => {}
         Ok(Err(e)) => {
             tracing::error!("analysis task failed: {}", unpack(&*e));
         }

@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-cargo_toml = { workspace = true }
 csv = { workspace = true }
 dashmap = { workspace = true }
 flate2 = { workspace = true }
