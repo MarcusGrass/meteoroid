@@ -784,6 +784,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "strsim",
  "tar",
  "tempfile",
  "tokio",
