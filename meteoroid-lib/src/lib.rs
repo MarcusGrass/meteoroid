@@ -3,7 +3,7 @@ use dashmap::DashSet;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -103,7 +103,8 @@ async fn exec_parallel(mut config: MeteroidConfig) -> anyhow::Result<()> {
             analysis_out_recv,
             &mut report,
             config.analyze_args.write_outputs,
-            config.analyze_args.include_non_diverging_crates,
+            config.analyze_args.skip_non_diverging_diffs,
+            config.analyze_args.diff_tool.as_deref(),
         ))
         .await
     {
@@ -126,11 +127,12 @@ async fn drain_analyses(
     mut analysis_out_recv: tokio::sync::mpsc::Receiver<CrateAnalysis>,
     report: &mut AnalysisReport,
     write_outputs: bool,
-    include_non_diverging: bool,
+    skip_non_diverging_diffs: bool,
+    diff_tool: Option<&Path>,
 ) {
     while let Some(next) = analysis_out_recv.recv().await {
         report
-            .add_result(next, write_outputs, include_non_diverging)
+            .add_result(diff_tool, next, write_outputs, skip_non_diverging_diffs)
             .await;
     }
 }

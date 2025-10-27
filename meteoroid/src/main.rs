@@ -55,10 +55,6 @@ pub struct Args {
     /// Where to output the report (defaults to `output-dir`)
     #[clap(long)]
     report_dest: Option<PathBuf>,
-    /// Include non diverging crate details in the report (may create significant noise)
-    /// statistics for all analyzed crates are included either way
-    #[clap(long)]
-    report_non_diverging: bool,
     /// Maximum crates to analyze concurrently,
     /// defaults to available parallelism (usually the number of cores),
     /// if that is unavailable `2` will be used
@@ -67,6 +63,12 @@ pub struct Args {
     /// How long to maximally wait for a `rustfmt` process to finish once started.
     #[clap(long, default_value = "30")]
     analysis_task_timeout_seconds: NonZeroU32,
+    /// Don't send non-diverging diffs for further processing.
+    /// Overall stats will still be reported, but detailed data won't be available.
+    /// This is mainly useful if running on a large amount of crates, to keep the html report
+    /// reasonably sized.
+    #[clap(long, default_value_t = false)]
+    skip_non_diverging_diffs: bool,
     /// Extra command-line `config` variables, passed directly to `rustfmt`
     #[clap(long)]
     config: Option<String>,
@@ -77,6 +79,11 @@ pub struct Args {
     /// - `3` is unrestricted verbosity, `trace` and up
     #[clap(long, short, default_value_t = 2)]
     verbosity: u8,
+    /// Which diff tool to use for meta-diffing (the diff of the diffs between a local
+    /// version of `rustfmt` and upstream. If none are supplied `diff` will be used,
+    /// if not present, the meta diff won't be displayed (only relevant for the `html` report).
+    #[clap(long, env = "METEOROID_DIFF_TOOL")]
+    meteoroid_diff_tool: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -116,7 +123,8 @@ async fn main() -> ExitCode {
             report_dest: args.report_dest,
             config: args.config,
             write_outputs: !args.no_output_files,
-            include_non_diverging_crates: args.report_non_diverging,
+            skip_non_diverging_diffs: args.skip_non_diverging_diffs,
+            diff_tool: args.meteoroid_diff_tool,
         },
         analysis_max_concurrent: num_parallel,
         analysis_timeout: std::time::Duration::from_secs(u64::from(

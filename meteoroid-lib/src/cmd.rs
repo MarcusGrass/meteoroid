@@ -227,3 +227,55 @@ pub(crate) async fn run_rustfmt(cmd: &mut Command, timeout: Duration) -> Rustfmt
         "command failed: {cmd:?}\nstdout: {stdout:?}\nstderr: {stderr:?}"
     ))
 }
+
+pub enum DiffResult {
+    Diff(String),
+    ToolNotFound,
+    Error(anyhow::Error),
+}
+
+pub(crate) async fn try_diff(
+    diff_tool: Option<&Path>,
+    upstream: &Path,
+    local: &Path,
+) -> DiffResult {
+    let diff_tool = diff_tool.unwrap_or_else(|| Path::new("diff"));
+    let output = match Command::new(diff_tool)
+        .arg(upstream)
+        .arg(local)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return DiffResult::Error(anyhow::anyhow!(
+                "failed to run diff tool: {}\n{e}",
+                diff_tool.display()
+            ));
+        }
+    };
+    if output.status.success()
+        || (Some(1) == output.status.code()
+            && output.stderr.is_empty()
+            && !output.stdout.is_empty())
+    {
+        // Some diff tools return 1 on diff, heuristically we'll assume that an empty stderr, a non-empty stdout
+        // on a code 1 means that there's a successful diff
+        let diff = String::from_utf8_lossy(output.stdout.as_slice()).to_string();
+        DiffResult::Diff(diff)
+    } else if let Some(127) = output.status.code() {
+        // Not found, tools may differ here, but both diff and difft will return 2 (on Linux)
+        // if the target FILES are not found. We're checking that the binary is found
+        DiffResult::ToolNotFound
+    } else {
+        let stdout = String::from_utf8_lossy(output.stdout.as_slice());
+        let stderr = String::from_utf8_lossy(output.stderr.as_slice());
+        DiffResult::Error(anyhow::anyhow!(
+            "failed to run diff tool={}, error code={:?}:\nstdout: {stdout:?}\nstderr: {stderr:?}",
+            diff_tool.display(),
+            output.status.code(),
+        ))
+    }
+}

@@ -177,6 +177,10 @@ impl CrateName {
         let raw = format!("{}-{label}.diff", self.0.0.display());
         best_attempt_validate_path(&raw)
     }
+    pub fn try_convert_to_diverge_file_name(&self) -> anyhow::Result<NormalPath> {
+        let raw = format!("{}-diverge.dif", self.0.0.display());
+        best_attempt_validate_path(&raw)
+    }
     pub fn try_convert_to_rustfmt_error_file_name(
         &self,
         label: &str,
@@ -194,7 +198,7 @@ impl Display for CrateName {
 }
 
 /// Should be considered and treated as untrusted user input
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, Eq, PartialEq)]
 pub(crate) struct GitRepo(Url);
 
 impl GitRepo {

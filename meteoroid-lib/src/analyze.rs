@@ -1,6 +1,7 @@
 pub(crate) mod report;
+mod similarity;
 
-use crate::analyze::report::{CrateAnalysis, RustfmtAnalysis};
+use crate::analyze::report::{CrateAnalysis, DivergingDiff, RustfmtAnalysis};
 use crate::cmd::{RustFmtBuildOutputs, RustfmtOutput, run_rustfmt};
 use crate::git::GitSyncedCrate;
 use dashmap::DashSet;
@@ -16,7 +17,8 @@ pub struct AnalyzeArgs {
     pub report_dest: Option<PathBuf>,
     pub config: Option<String>,
     pub write_outputs: bool,
-    pub include_non_diverging_crates: bool,
+    pub skip_non_diverging_diffs: bool,
+    pub diff_tool: Option<PathBuf>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -29,12 +31,6 @@ pub(crate) async fn analyze_crate(
     timeout: Duration,
 ) -> anyhow::Result<Option<CrateAnalysis>> {
     tracing::trace!("analyzing '{}'", target.pruned_crate.crate_name);
-    let mut ca = CrateAnalysis::new(
-        target.pruned_crate.crate_name.clone(),
-        target.repo_root.clone(),
-        target.pruned_crate.repository.clone(),
-        target.head_branch.clone(),
-    );
     let ident = format!(
         "{}:{}",
         target.pruned_crate.repository,
@@ -69,11 +65,11 @@ pub(crate) async fn analyze_crate(
             (None, Some(e))
         }
     };
-    ca.upstream_rustfmt_analysis = Some(RustfmtAnalysis {
+    let upstream_rustfmt_analysis = RustfmtAnalysis {
         diff_output: upstream_diff_output.clone(),
         rustfmt_error,
         elapsed,
-    });
+    };
     let TimedOutput { output, elapsed } = timed(run_local_rustfmt_build(
         &target.repo_root,
         rustfmt_build_outputs,
@@ -81,10 +77,11 @@ pub(crate) async fn analyze_crate(
         timeout,
     ))
     .await;
+    let mut diverging_diff = DivergingDiff::None;
     let (local_diff_output, rustfmt_error) = match output {
         Ok(None) => {
             if upstream_diff_output.is_some() {
-                ca.diverving_diff = true;
+                diverging_diff = DivergingDiff::UpstreamOnly;
                 tracing::info!(
                     "local rustfmt didn't diff while upstream rustfmt did on '{}'({})",
                     target.pruned_crate.crate_name,
@@ -106,10 +103,10 @@ pub(crate) async fn analyze_crate(
                         target.pruned_crate.crate_name,
                         target.repo_root.display()
                     );
-                    ca.diverving_diff = true;
+                    diverging_diff = DivergingDiff::DiffBetween;
                 }
             } else {
-                ca.diverving_diff = true;
+                diverging_diff = DivergingDiff::LocalOnly;
                 tracing::info!(
                     "local rustfmt diffed on '{}'({}) while upstream didn't",
                     target.pruned_crate.crate_name,
@@ -123,17 +120,25 @@ pub(crate) async fn analyze_crate(
             (None, Some(e))
         }
     };
-    ca.local_rustfmt_analysis = Some(RustfmtAnalysis {
+    let local_rustfmt_analysis = RustfmtAnalysis {
         diff_output: local_diff_output,
         rustfmt_error,
         elapsed,
-    });
+    };
     tracing::debug!(
         "finished {} at {}",
         target.pruned_crate.crate_name,
         target.repo_root.display()
     );
-    Ok(Some(ca))
+    Ok(Some(CrateAnalysis::new(
+        target.pruned_crate.crate_name.clone(),
+        target.repo_root.clone(),
+        target.pruned_crate.repository.clone(),
+        target.head_branch.clone(),
+        diverging_diff,
+        upstream_rustfmt_analysis,
+        local_rustfmt_analysis,
+    )))
 }
 
 async fn run_local_rustfmt_build(

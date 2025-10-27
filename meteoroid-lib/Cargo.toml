@@ -9,10 +9,11 @@ csv = { workspace = true }
 dashmap = { workspace = true }
 flate2 = { workspace = true }
 futures = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 reqwest = { workspace = true }
 rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strsim = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

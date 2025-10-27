@@ -1,7 +1,12 @@
+mod html;
+
+use crate::analyze::similarity::similarity;
+use crate::cmd::{DiffResult, try_diff};
 use crate::crates::crate_consumer::default::{CrateName, GitRepo, NormalPath};
 use crate::unpack;
 use anyhow::Context;
-use std::path::PathBuf;
+use std::cmp::Ordering;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -24,6 +29,35 @@ struct OutputDirs {
     diverged: PathBuf,
     nondiverged: PathBuf,
     errors: PathBuf,
+}
+
+impl Ord for CrateReport {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Diverged is top priority
+        if self.diverged && !other.diverged {
+            return Ordering::Greater;
+        } else if !self.diverged && other.diverged {
+            return Ordering::Less;
+        }
+        if self.has_error() && !other.has_error() {
+            return Ordering::Greater;
+        } else if !self.has_error() && other.has_error() {
+            return Ordering::Less;
+        }
+        if self.has_diff() && !other.has_diff() {
+            return Ordering::Greater;
+        } else if !self.has_diff() && other.has_diff() {
+            return Ordering::Less;
+        }
+        self.crate_name.cmp(&other.crate_name)
+    }
+}
+
+impl PartialOrd for CrateReport {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl AnalysisReport {
@@ -72,57 +106,135 @@ impl AnalysisReport {
 
     pub(crate) async fn add_result(
         &mut self,
+        diff_tool: Option<&Path>,
         cr: CrateAnalysis,
         write_outputs: bool,
-        include_non_diverging: bool,
+        skip_non_diverging_diffs: bool,
     ) {
-        let mut rep = CrateReport::new(
-            cr.crate_name.clone(),
-            cr.local_root.display().to_string(),
-            cr.crate_url,
-            cr.head_branch,
-        );
-        if cr.diverving_diff {
+        let pre_errors = self.num_local_failures + self.num_upstream_failures;
+        if cr.diverging_diff.diverged() {
             self.num_diverging_diffs += 1;
         }
-        let failures_pre = self.num_upstream_failures + self.num_local_failures;
-        if let Some(upstream) = cr.upstream_rustfmt_analysis {
-            let out = create_rustfmt_output(
-                &cr.crate_name,
-                &self.output,
-                "upstream",
-                write_outputs,
-                cr.diverving_diff,
-                upstream,
-                &mut self.num_upstream_successes,
-                &mut self.num_upstream_diffs,
-                &mut self.num_upstream_failures,
-            )
-            .await;
-            rep.upstream_rustfmt_output = Some(out);
-        }
-        if let Some(local) = cr.local_rustfmt_analysis {
-            let out = create_rustfmt_output(
-                &cr.crate_name,
-                &self.output,
-                "local",
-                write_outputs,
-                cr.diverving_diff,
-                local,
-                &mut self.num_local_successes,
-                &mut self.num_local_diffs,
-                &mut self.num_local_failures,
-            )
-            .await;
-            rep.local_rustfmt_output = Some(out);
-        }
-        // Write if include, or has diff, or there's an error
-        if include_non_diverging
-            || cr.diverving_diff
-            || failures_pre < self.num_local_failures + self.num_upstream_failures
+        let similar_errors = if let (Some(local_err), Some(upstream_err)) = (
+            cr.local_rustfmt_analysis.rustfmt_error.as_deref(),
+            cr.upstream_rustfmt_analysis.rustfmt_error.as_deref(),
+        ) {
+            let lerr = local_err.to_string();
+            let uerr = upstream_err.to_string();
+            similarity(&lerr, &uerr)
+        } else {
+            false
+        };
+        let upstream_out = create_rustfmt_output(
+            &cr.crate_name,
+            &self.output,
+            "upstream",
+            write_outputs,
+            cr.diverging_diff.diverged(),
+            cr.upstream_rustfmt_analysis,
+            &mut self.num_upstream_successes,
+            &mut self.num_upstream_diffs,
+            &mut self.num_upstream_failures,
+        )
+        .await;
+        let local_out = create_rustfmt_output(
+            &cr.crate_name,
+            &self.output,
+            "local",
+            write_outputs,
+            cr.diverging_diff.diverged(),
+            cr.local_rustfmt_analysis,
+            &mut self.num_local_successes,
+            &mut self.num_local_diffs,
+            &mut self.num_local_failures,
+        )
+        .await;
+        let meta_diff_file = match cr.diverging_diff {
+            DivergingDiff::LocalOnly | DivergingDiff::UpstreamOnly | DivergingDiff::None => None,
+            DivergingDiff::DiffBetween => {
+                Self::write_meta_diff_if_present(
+                    diff_tool,
+                    &cr.crate_name,
+                    &self.output,
+                    &upstream_out,
+                    &local_out,
+                )
+                .await
+            }
+        };
+
+        if cr.diverging_diff.diverged()
+            || !skip_non_diverging_diffs
+            || pre_errors < self.num_local_failures + self.num_upstream_failures
         {
-            self.crate_reports.push(rep);
+            self.crate_reports.push(CrateReport::new(
+                cr.crate_name.clone(),
+                cr.local_root.display().to_string(),
+                cr.crate_url,
+                cr.head_branch,
+                cr.diverging_diff.diverged(),
+                similar_errors,
+                meta_diff_file,
+                upstream_out,
+                local_out,
+            ));
         }
+    }
+
+    async fn write_meta_diff_if_present(
+        diff_tool: Option<&Path>,
+        crate_name: &CrateName,
+        output_dirs: &OutputDirs,
+        upstream_out: &FmtOutput,
+        local_out: &FmtOutput,
+    ) -> Option<PathBuf> {
+        let content = match (
+            upstream_out.diff_output_file.as_deref(),
+            local_out.diff_output_file.as_deref(),
+        ) {
+            (Some(upstream), Some(local)) => match try_diff(diff_tool, upstream, local).await {
+                DiffResult::Diff(d) => d,
+                DiffResult::ToolNotFound => {
+                    return None;
+                }
+                DiffResult::Error(e) => {
+                    tracing::error!(
+                        "failed to produce meta diff with diff_tool={:?}: {}",
+                        diff_tool,
+                        unpack(&*e)
+                    );
+                    return None;
+                }
+            },
+            (a, b) => {
+                tracing::error!(
+                    "tried to run meta diff, but both upstream and local diffs were not present. upstream={:?}, local={:?}",
+                    a,
+                    b
+                );
+                return None;
+            }
+        };
+        let name = match crate_name.try_convert_to_diverge_file_name() {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::error!(
+                    "failed to convert crate name to diverge file name: {}",
+                    unpack(&*e)
+                );
+                return None;
+            }
+        };
+        let path = place_file(output_dirs, &name, true, false);
+        if let Err(e) = dump_content(&path, &content).await {
+            tracing::error!(
+                "failed to write diverge meta diff to path={}: {}",
+                path.display(),
+                unpack(&*e)
+            );
+            return None;
+        }
+        Some(path)
     }
 
     pub(crate) async fn finish_report(
@@ -156,6 +268,7 @@ impl AnalysisReport {
                 tracing::info!("Found no diverging diffs");
             }
             tracing::info!("Wrote report to {}", path.display());
+            self.html_report()?;
             Ok::<_, anyhow::Error>(())
         })
         .await
@@ -183,7 +296,8 @@ async fn create_rustfmt_output(
         *diff_counter += 1;
         let file_name = crate_name.try_convert_to_diff_file_name(label);
         if write_outputs && let Ok(file_name) = file_name {
-            if let Err(e) = dump_content(output, &file_name, &diff, diverged, false).await {
+            let file_name = place_file(output, &file_name, diverged, false);
+            if let Err(e) = dump_content(&file_name, &diff).await {
                 tracing::error!("failed to dump diff output: {}", unpack(&*e));
                 None
             } else {
@@ -199,9 +313,8 @@ async fn create_rustfmt_output(
         *failure_counter += 1;
         let file_name = crate_name.try_convert_to_rustfmt_error_file_name(label);
         if write_outputs && let Ok(file_name) = file_name {
-            if let Err(e) =
-                dump_content(output, &file_name, &unpack(&*e).to_string(), diverged, true).await
-            {
+            let file_name = place_file(output, &file_name, diverged, true);
+            if let Err(e) = dump_content(&file_name, &unpack(&*e).to_string()).await {
                 tracing::error!("failed to dump error output: {}", unpack(&*e));
                 None
             } else {
@@ -214,83 +327,94 @@ async fn create_rustfmt_output(
         None
     };
     FmtOutput {
-        diff_output_file: diff_output_file.map(|f| f.0.display().to_string()),
-        error_output_file: error_output_file.map(|f| f.0.display().to_string()),
+        diff_output_file,
+        error_output_file,
         elapsed: fmt_elapsed(analysis.elapsed),
     }
 }
 
 // Too many bools here
-async fn dump_content(
-    output: &OutputDirs,
-    file_name: &NormalPath,
-    content: &str,
-    diverged: bool,
-    err: bool,
-) -> anyhow::Result<()> {
-    let path = if err {
+async fn dump_content(dest: &Path, content: &str) -> anyhow::Result<()> {
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(&dest)
+        .await
+        .with_context(|| format!("failed to open {}", dest.display()))?;
+    file.write_all(content.as_bytes())
+        .await
+        .with_context(|| format!("failed to write to {}", dest.display()))
+}
+
+fn place_file(output: &OutputDirs, file_name: &NormalPath, diverged: bool, err: bool) -> PathBuf {
+    if err {
         output.errors.as_path().join(file_name.0.as_path())
     } else if diverged {
         output.diverged.as_path().join(file_name.0.as_path())
     } else {
         output.nondiverged.as_path().join(file_name.0.as_path())
-    };
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(&path)
-        .await
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    file.write_all(content.as_bytes())
-        .await
-        .with_context(|| format!("failed to write to {}", path.display()))
+    }
 }
 
 fn fmt_elapsed(elapsed: Duration) -> String {
     format!("{:.2}s", elapsed.as_secs_f64())
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Eq, PartialEq)]
 struct CrateReport {
     crate_name: CrateName,
     local_root: String,
     repo_url: GitRepo,
     head_branch: String,
-    check_output: Option<CheckOutput>,
-    upstream_rustfmt_output: Option<FmtOutput>,
-    local_rustfmt_output: Option<FmtOutput>,
+    diverged: bool,
+    similar_errors: bool,
+    meta_diff_file: Option<PathBuf>,
+    upstream_rustfmt_output: FmtOutput,
+    local_rustfmt_output: FmtOutput,
 }
 
 impl CrateReport {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         crate_name: CrateName,
         local_root: String,
         repo_url: GitRepo,
         head_branch: String,
+        diverged: bool,
+        similar_errors: bool,
+        meta_diff_file: Option<PathBuf>,
+        upstream_rustfmt_output: FmtOutput,
+        local_rustfmt_output: FmtOutput,
     ) -> Self {
         Self {
             crate_name,
             local_root,
             repo_url,
             head_branch,
-            check_output: None,
-            upstream_rustfmt_output: None,
-            local_rustfmt_output: None,
+            diverged,
+            similar_errors,
+            meta_diff_file,
+            upstream_rustfmt_output,
+            local_rustfmt_output,
         }
+    }
+
+    fn has_error(&self) -> bool {
+        self.upstream_rustfmt_output.error_output_file.is_some()
+            || self.local_rustfmt_output.error_output_file.is_some()
+    }
+
+    fn has_diff(&self) -> bool {
+        self.upstream_rustfmt_output.diff_output_file.is_some()
+            || self.local_rustfmt_output.diff_output_file.is_some()
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Eq, PartialEq)]
 struct FmtOutput {
-    diff_output_file: Option<String>,
-    error_output_file: Option<String>,
-    elapsed: String,
-}
-
-#[derive(serde::Serialize)]
-struct CheckOutput {
-    error_output_file: Option<String>,
+    diff_output_file: Option<PathBuf>,
+    error_output_file: Option<PathBuf>,
     elapsed: String,
 }
 
@@ -299,9 +423,24 @@ pub(crate) struct CrateAnalysis {
     pub(super) local_root: PathBuf,
     pub(super) crate_url: GitRepo,
     pub(super) head_branch: String,
-    pub(super) diverving_diff: bool,
-    pub(super) upstream_rustfmt_analysis: Option<RustfmtAnalysis>,
-    pub(super) local_rustfmt_analysis: Option<RustfmtAnalysis>,
+    pub(super) diverging_diff: DivergingDiff,
+    pub(super) upstream_rustfmt_analysis: RustfmtAnalysis,
+    pub(super) local_rustfmt_analysis: RustfmtAnalysis,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub(crate) enum DivergingDiff {
+    LocalOnly,
+    UpstreamOnly,
+    DiffBetween,
+    None,
+}
+
+impl DivergingDiff {
+    #[inline]
+    pub(crate) fn diverged(self) -> bool {
+        self != Self::None
+    }
 }
 
 impl CrateAnalysis {
@@ -310,15 +449,18 @@ impl CrateAnalysis {
         local_root: PathBuf,
         crate_url: GitRepo,
         head_branch: String,
+        diverging_diff: DivergingDiff,
+        upstream_rustfmt_analysis: RustfmtAnalysis,
+        local_rustfmt_analysis: RustfmtAnalysis,
     ) -> Self {
         Self {
             crate_name,
             local_root,
             crate_url,
             head_branch,
-            diverving_diff: false,
-            upstream_rustfmt_analysis: None,
-            local_rustfmt_analysis: None,
+            diverging_diff,
+            upstream_rustfmt_analysis,
+            local_rustfmt_analysis,
         }
     }
 }
