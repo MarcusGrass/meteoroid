@@ -3,7 +3,7 @@ mod similarity;
 
 use crate::analyze::report::{CrateAnalysis, DivergingDiff, RustfmtAnalysis};
 use crate::cmd::{RustFmtBuildOutputs, RustfmtOutput, run_rustfmt};
-use crate::git::GitSyncedCrate;
+use crate::git::CrateReadyForAnalysis;
 use dashmap::DashSet;
 use rustc_hash::FxBuildHasher;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ pub struct AnalyzeArgs {
 
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn analyze_crate(
-    target: &GitSyncedCrate,
+    target: &CrateReadyForAnalysis,
     rustfmt_build_outputs: &RustFmtBuildOutputs,
     upstream_rustfmt_build_outputs: &RustFmtBuildOutputs,
     config: Option<&str>,
@@ -31,17 +31,8 @@ pub(crate) async fn analyze_crate(
     timeout: Duration,
 ) -> anyhow::Result<Option<CrateAnalysis>> {
     tracing::trace!("analyzing '{}'", target.pruned_crate.crate_name);
-    let ident = format!(
-        "{}:{}",
-        target.pruned_crate.repository,
-        target.repo_root.display()
-    );
-    if !seen.insert(ident) {
-        tracing::trace!(
-            "skipping seen workspace {} at {}",
-            target.repo_root.display(),
-            target.pruned_crate.repository
-        );
+    if !seen.insert(target.repo_root.display().to_string()) {
+        tracing::trace!("skipping seen workspace at {}", target.repo_root.display(),);
         return Ok(None);
     }
     let TimedOutput { output, elapsed } = timed(run_local_rustfmt_build(

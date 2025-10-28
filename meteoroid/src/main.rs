@@ -1,5 +1,8 @@
 use clap::Parser;
-use meteoroid_lib::{AnalyzeArgs, ConsumerOpts, MeteroidConfig, stop_channel, unpack};
+use meteoroid_lib::{
+    AnalyzeArgs, ConsumerOpts, CrateSource, GitSyncConfig, LocalCratesConfig, MeteroidConfig,
+    stop_channel, unpack,
+};
 use std::marker::PhantomData;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
@@ -28,15 +31,11 @@ pub struct Args {
     /// Path to the unmodified rustfmt repository that should be used as a baseline
     #[clap(long)]
     rustfmt_upstream_repo: PathBuf,
-    /// How old the cached crates index is allowed to be before a new database dump is fetched.
-    #[clap(long, short, default_value_t = 7)]
-    crates_index_max_age: u8,
-    /// Whether to resync previously cloned crates before running analysis
-    #[clap(long, short, default_value_t = false)]
-    git_resync_before: bool,
-    /// The number of git-clones (or refetches) that are allowed to run concurrently
-    #[clap(long, default_value = "2")]
-    git_sync_max_concurrent: NonZeroUsize,
+    /// If set to a directory, instead of fetching crates from git,
+    /// the tool will use crates from that directory instead.
+    /// The tool will assume that each sub-directory in the supplied directory
+    /// contains a crate to analyze
+    use_crates_from: Option<PathBuf>,
     /// The maximum amount of crates to pull
     #[clap(long, default_value_t = 100)]
     max_crates: usize,
@@ -84,6 +83,34 @@ pub struct Args {
     /// if not present, the meta diff won't be displayed (only relevant for the `html` report).
     #[clap(long, env = "METEOROID_DIFF_TOOL")]
     meteoroid_diff_tool: Option<PathBuf>,
+
+    #[clap(subcommand)]
+    command: Subcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum Subcommand {
+    /// Fetch crate metadata from `crates.io` then try to sync crates with `git`
+    Remote {
+        /// How old the cached crates index is allowed to be before a new database dump is fetched.
+        #[clap(long, short, default_value_t = 7)]
+        crates_index_max_age: u8,
+
+        /// Whether to resync previously cloned crates before running analysis
+        #[clap(long, default_value_t = false)]
+        git_resync_before: bool,
+
+        /// The number of git-clones (or refetches) that are allowed to run concurrently
+        #[clap(long, default_value = "2")]
+        git_sync_max_concurrent: NonZeroUsize,
+    },
+    /// Analyze crates locally
+    Local {
+        /// The path to search for crates to analyze in.
+        /// Should be a directory containing subdirectories with crates.
+        #[clap(long, short)]
+        path: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -113,9 +140,20 @@ async fn main() -> ExitCode {
     let config = MeteroidConfig {
         workdir: args.workdir,
         output_dir: args.output_dir,
-        crates_index_max_age_days: args.crates_index_max_age,
-        git_resync_before: args.git_resync_before,
-        git_clone_max_concurrent: args.git_sync_max_concurrent,
+        crate_source: match args.command {
+            Subcommand::Remote {
+                crates_index_max_age,
+                git_resync_before,
+                git_sync_max_concurrent,
+            } => CrateSource::GitSync(GitSyncConfig {
+                crates_index_max_age_days: crates_index_max_age,
+                git_resync_before,
+                git_clone_max_concurrent: git_sync_max_concurrent,
+            }),
+            Subcommand::Local { path } => {
+                CrateSource::LocalCrates(LocalCratesConfig { crate_dir: path })
+            }
+        },
         consumer_opts: opts,
         analyze_args: AnalyzeArgs {
             rustfmt_repo: args.rustfmt_local_repo,

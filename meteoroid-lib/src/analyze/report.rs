@@ -365,8 +365,8 @@ fn fmt_elapsed(elapsed: Duration) -> String {
 struct CrateReport {
     crate_name: CrateName,
     local_root: String,
-    repo_url: GitRepo,
-    head_branch: String,
+    repo_url: Option<GitRepo>,
+    head_branch: Option<String>,
     diverged: bool,
     similar_errors: bool,
     meta_diff_file: Option<PathBuf>,
@@ -379,8 +379,8 @@ impl CrateReport {
     fn new(
         crate_name: CrateName,
         local_root: String,
-        repo_url: GitRepo,
-        head_branch: String,
+        repo_url: Option<GitRepo>,
+        head_branch: Option<String>,
         diverged: bool,
         similar_errors: bool,
         meta_diff_file: Option<PathBuf>,
@@ -421,8 +421,8 @@ struct FmtOutput {
 pub(crate) struct CrateAnalysis {
     pub(super) crate_name: CrateName,
     pub(super) local_root: PathBuf,
-    pub(super) crate_url: GitRepo,
-    pub(super) head_branch: String,
+    pub(super) crate_url: Option<GitRepo>,
+    pub(super) head_branch: Option<String>,
     pub(super) diverging_diff: DivergingDiff,
     pub(super) upstream_rustfmt_analysis: RustfmtAnalysis,
     pub(super) local_rustfmt_analysis: RustfmtAnalysis,
@@ -447,8 +447,8 @@ impl CrateAnalysis {
     pub(super) fn new(
         crate_name: CrateName,
         local_root: PathBuf,
-        crate_url: GitRepo,
-        head_branch: String,
+        crate_url: Option<GitRepo>,
+        head_branch: Option<String>,
         diverging_diff: DivergingDiff,
         upstream_rustfmt_analysis: RustfmtAnalysis,
         local_rustfmt_analysis: RustfmtAnalysis,

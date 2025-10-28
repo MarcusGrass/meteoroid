@@ -491,9 +491,15 @@ impl AnalysisReport {
             } else {
                 ""
             },
-            report.repo_url,
-            report.repo_url,
-            report.head_branch,
+            report
+                .repo_url
+                .as_ref()
+                .map_or_else(|| "local".to_string(), std::string::ToString::to_string),
+            report
+                .repo_url
+                .as_ref()
+                .map_or_else(|| "local".to_string(), std::string::ToString::to_string),
+            report.head_branch.as_deref().unwrap_or("local"),
             report.local_root,
             Self::generate_fmt_output_html(
                 "Local rustfmt",

@@ -170,7 +170,7 @@ impl CrateConsumer for Consumer {
 
 /// Should be considered and treated as untrusted user input
 #[derive(Debug, Clone, serde::Serialize, Eq, PartialEq, PartialOrd, Ord)]
-pub(crate) struct CrateName(NormalPath);
+pub(crate) struct CrateName(pub(crate) NormalPath);
 
 impl CrateName {
     pub fn try_convert_to_diff_file_name(&self, label: &str) -> anyhow::Result<NormalPath> {
@@ -199,7 +199,7 @@ impl Display for CrateName {
 
 /// Should be considered and treated as untrusted user input
 #[derive(Debug, Clone, serde::Serialize, Eq, PartialEq)]
-pub(crate) struct GitRepo(Url);
+pub(crate) struct GitRepo(pub(crate) Url);
 
 impl GitRepo {
     #[inline]
@@ -217,7 +217,7 @@ impl Display for GitRepo {
 
 /// Should be considered and treated as untrusted user input
 #[derive(Debug, Clone)]
-pub(crate) struct RepoName(NormalPath);
+pub(crate) struct RepoName(pub(crate) NormalPath);
 
 impl RepoName {
     #[inline]
@@ -265,6 +265,13 @@ fn validate_repo(repo: &str) -> anyhow::Result<(GitRepo, RepoName)> {
 #[derive(Debug, Clone, serde::Serialize, Eq, PartialEq, PartialOrd, Ord)]
 pub(crate) struct NormalPath(pub(crate) PathBuf);
 
+impl NormalPath {
+    #[inline]
+    pub(crate) fn from_checked_path(path_buf: PathBuf) -> Self {
+        Self(path_buf)
+    }
+}
+
 fn best_attempt_validate_path(s: &str) -> anyhow::Result<NormalPath> {
     let pb = PathBuf::from(s);
     normalized_single(pb)
@@ -287,7 +294,7 @@ fn normalized_single(path_buf: PathBuf) -> anyhow::Result<NormalPath> {
 #[derive(Debug, Clone)]
 pub struct PrunedCrate {
     pub(crate) crate_name: CrateName,
-    pub(crate) repository: GitRepo,
+    pub(crate) repository: Option<GitRepo>,
     pub(crate) repo_dir_name: RepoName,
 }
 
@@ -297,7 +304,7 @@ impl Consumer {
             .into_iter()
             .map(|c| PrunedCrate {
                 crate_name: c.rt.crate_name,
-                repository: c.rt.repository,
+                repository: Some(c.rt.repository),
                 repo_dir_name: c.rt.repo_dir_name,
             })
             .collect()
