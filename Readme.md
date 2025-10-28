@@ -41,15 +41,21 @@ meteoroid <extra args>
 Or use the supplied script at [.local/docker.sh](./.local/docker.sh) (requires `bash`)
 
 ```shell
-./.local/docker.sh <your-workdir> <your-local-modified-rustfmt-checkout> <your-upstream-rustfmt-checkout> <your-analysis-output-directory> <extra-args>
+./.local/docker.sh <your-workdir> <your-local-modified-rustfmt-checkout> <your-upstream-rustfmt-checkout> <your-analysis-output-directory> <extra-args> remote <remote-args>
 ```
 
 One flaw with the container approach is that even if `target` is mounted, the crate index is re-fetched on each run.
 
-Or run directly:
+Or run directly, using remote crate fetch:
 
 ```shell
-cargo r -r -p meteoroid -- -w ~/output-dir/meteorite-data -o ~/output-dir/meteorite-results --rustfmt-local-repo ~/code/rustfmt/ --rustfmt-upstream-repo ~/code/upstream-rustfmt/ --git-sync-max-concurrent 8 --max-crates 100 --analyze-max-concurrent $(nproc)
+cargo r -r -p meteoroid -- -w ~/output-dir/meteorite-data -o ~/output-dir/meteorite-results --rustfmt-local-repo ~/code/rustfmt/ --rustfmt-upstream-repo ~/code/upstream-rustfmt/ --max-crates 100 --analysis-max-concurrent $(nproc) remote --git-sync-max-concurrent 8 
+```
+
+Or locally using some directory containing crates, such as the local crates cache:
+
+```shell
+cargo r -r -p meteoroid -- -w ~/output-dir/meteorite-data -o ~/output-dir/meteorite-results --rustfmt-local-repo ~/code/rustfmt/ --rustfmt-upstream-repo ~/code/upstream-rustfmt/ --max-crates 100 --analysis-max-concurrent $(nproc) local -p ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/
 ```
 
 `1000` crates takes about 15 minutes from a clean slate (on my machine with 16 git concurrent and 32 analysis concurrent), and leaves about `11G` of outputs in the workdir.
@@ -136,13 +142,6 @@ I have covered everything. Running in a container or VM could help.
 ## Future improvements
 
 Some collected suggestions from `zulip`, and more.
-
-### Use local crates
-
-Use the local crate cache to find candidate crates. This would be extremely convenient and fast, 
-and would reduce the required disk space for running.
-
-Cons are that scan-width is limited by the user's current crate cache state.
 
 ### Use cratesync
 

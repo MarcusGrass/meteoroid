@@ -13,13 +13,14 @@ mod crates;
 pub(crate) mod error;
 mod fs;
 mod git;
+mod local_crates;
 mod sync;
 
 pub use crate::analyze::AnalyzeArgs;
 use crate::analyze::report::{AnalysisReport, CrateAnalysis};
 use crate::cmd::{RustFmtBuildOutputs, build_rustfmt};
 use crate::crates::crate_consumer::default::PrunedCrate;
-use crate::git::GitSyncedCrate;
+use crate::git::CrateReadyForAnalysis;
 pub use crate::sync::{StopReceiver, stop_channel};
 pub use crates::crate_consumer::default::ConsumerOpts;
 pub use error::unpack;
@@ -27,14 +28,27 @@ pub use error::unpack;
 pub struct MeteroidConfig {
     pub workdir: PathBuf,
     pub output_dir: Option<PathBuf>,
-    pub crates_index_max_age_days: u8,
-    pub git_resync_before: bool,
-    pub git_clone_max_concurrent: NonZeroUsize,
     pub consumer_opts: ConsumerOpts,
+    pub crate_source: CrateSource,
     pub analyze_args: AnalyzeArgs,
     pub analysis_max_concurrent: NonZeroUsize,
     pub analysis_timeout: Duration,
     pub stop_receiver: StopReceiver,
+}
+
+pub enum CrateSource {
+    GitSync(GitSyncConfig),
+    LocalCrates(LocalCratesConfig),
+}
+
+pub struct GitSyncConfig {
+    pub crates_index_max_age_days: u8,
+    pub git_resync_before: bool,
+    pub git_clone_max_concurrent: NonZeroUsize,
+}
+
+pub struct LocalCratesConfig {
+    pub crate_dir: PathBuf,
 }
 
 #[inline]
@@ -44,34 +58,55 @@ pub async fn meteoroid(config: MeteroidConfig) -> anyhow::Result<()> {
 
 async fn exec_parallel(mut config: MeteroidConfig) -> anyhow::Result<()> {
     let wd = Workdir::new(config.workdir);
-    let Some((local_build_outputs, upstream_build_outputs, targets)) = config
-        .stop_receiver
-        .with_stop(prepare_rustfmt_and_target_crates(
-            &wd,
-            config.analyze_args.rustfmt_repo,
-            config.analyze_args.rustfmt_upstream_repo,
-            config.crates_index_max_age_days,
-            config.consumer_opts,
-        ))
-        .await
-        .transpose()?
-    else {
-        tracing::info!("stopped before starting analysis, exiting");
-        return Ok(());
-    };
-
-    let mut report = AnalysisReport::new(config.output_dir).await?;
-
-    // stop the sync task when this gets dropped
     let (sync_stop_send, sync_stop_recv) = stop_channel();
-    let sync = git::run_sync_task(
-        wd,
-        config.git_resync_before,
-        targets,
-        config.git_clone_max_concurrent,
-        sync_stop_recv,
-    );
-
+    let (sync, local_build_outputs, upstream_build_outputs) = match config.crate_source {
+        CrateSource::GitSync(gs) => {
+            let Some((local_build_outputs, upstream_build_outputs, targets)) = config
+                .stop_receiver
+                .with_stop(prepare_rustfmt_and_fetched_crates(
+                    &wd,
+                    config.analyze_args.rustfmt_repo,
+                    config.analyze_args.rustfmt_upstream_repo,
+                    gs.crates_index_max_age_days,
+                    config.consumer_opts,
+                ))
+                .await
+                .transpose()?
+            else {
+                tracing::info!("stopped before starting analysis, exiting");
+                return Ok(());
+            };
+            let sync = git::run_sync_task(
+                wd,
+                gs.git_resync_before,
+                targets,
+                gs.git_clone_max_concurrent,
+                sync_stop_recv,
+            );
+            (sync, local_build_outputs, upstream_build_outputs)
+        }
+        CrateSource::LocalCrates(lc) => {
+            let Some((local_build_outputs, upstream_build_outputs)) = config
+                .stop_receiver
+                .with_stop(prepare_rustfmt(
+                    config.analyze_args.rustfmt_repo,
+                    config.analyze_args.rustfmt_upstream_repo,
+                ))
+                .await
+                .transpose()?
+            else {
+                tracing::info!("stopped before starting analysis, exiting");
+                return Ok(());
+            };
+            let sync = local_crates::local_crate_find_task(
+                lc.crate_dir,
+                config.analysis_max_concurrent,
+                config.consumer_opts,
+                sync_stop_recv,
+            );
+            (sync, local_build_outputs, upstream_build_outputs)
+        }
+    };
     let (analysis_out_send, analysis_out_recv) = tokio::sync::mpsc::channel(32);
 
     let (analysis_stop_send, mut analysis_stop_recv) = stop_channel();
@@ -96,6 +131,8 @@ async fn exec_parallel(mut config: MeteroidConfig) -> anyhow::Result<()> {
             }
         }
     });
+
+    let mut report = AnalysisReport::new(config.output_dir).await?;
 
     match config
         .stop_receiver
@@ -137,7 +174,7 @@ async fn drain_analyses(
     }
 }
 
-async fn prepare_rustfmt_and_target_crates(
+async fn prepare_rustfmt_and_fetched_crates(
     workdir: &Workdir,
     rustfmt_repo: PathBuf,
     rustfmt_upstream_repo: PathBuf,
@@ -150,6 +187,14 @@ async fn prepare_rustfmt_and_target_crates(
         fetch_and_process_crates(workdir, crates_index_max_age_days, consumer_opts)
     )?;
     Ok((local_build_outputs, upstream_build_outputs, targets))
+}
+
+async fn prepare_rustfmt(
+    rustfmt_repo: PathBuf,
+    rustfmt_upstream_repo: PathBuf,
+) -> anyhow::Result<(RustFmtBuildOutputs, RustFmtBuildOutputs)> {
+    let build_task = build_sequential(rustfmt_repo, rustfmt_upstream_repo).await?;
+    Ok((build_task.0, build_task.1))
 }
 
 // If not built sequentially, there can be toolchain download raciness
@@ -178,7 +223,7 @@ async fn fetch_and_process_crates(
 
 #[allow(clippy::too_many_arguments)]
 async fn analysis_task(
-    mut recv: tokio::sync::mpsc::Receiver<GitSyncedCrate>,
+    mut recv: tokio::sync::mpsc::Receiver<CrateReadyForAnalysis>,
     send: tokio::sync::mpsc::Sender<CrateAnalysis>,
     local_build_outputs: RustFmtBuildOutputs,
     upstream_build_outputs: RustFmtBuildOutputs,
