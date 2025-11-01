@@ -2,6 +2,8 @@
 members = ["meteoroid","meteoroid-lib"]
 resolver = "3"
 
+[workspace.package]
+license = "Unlicense"
 
 [workspace.dependencies]
 meteoroid-lib = { path = "./meteoroid-lib" }
