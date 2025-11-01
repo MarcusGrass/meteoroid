@@ -149,15 +149,3 @@ async fn untar_gzipped<R: std::io::Read + Send + 'static>(
     .context("failed to unpack crates index tar")??;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::crates::untar_gzipped;
-
-    #[tokio::test]
-    async fn untar() {
-        let file = std::fs::File::open("/home/gramar/misc/crates/db-dump.tar.gz").unwrap();
-
-        untar_gzipped(file, "/tmp/".into()).await.unwrap();
-    }
-}
