@@ -3,6 +3,7 @@ use crate::analyze::report::{AnalysisReport, CrateReport, FmtOutput};
 use crate::unpack;
 use anyhow::Context;
 use std::path::Path;
+use std::time::Duration;
 
 impl AnalysisReport {
     pub(crate) fn html_report(mut self) -> anyhow::Result<()> {
@@ -16,11 +17,23 @@ impl AnalysisReport {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     fn generate_html(&self) -> String {
         let total_reports = self.crate_reports.len();
         let total_upstream =
             self.num_upstream_successes + self.num_upstream_diffs + self.num_upstream_failures;
+        let (avg_local_excessive_perc, avg_local_excessive_time) =
+            if self.excessive_time_measurements == 0 {
+                (0.0, 0.0)
+            } else {
+                let avg_local_excessive_perc =
+                    self.avg_local_excessive_time_perc / self.excessive_time_measurements as f64;
+                let avg_local_excessive_time_micros = self.avg_local_excessive_time_micros as f64
+                    / self.excessive_time_measurements as f64;
+                let avg_local_excessive_time =
+                    Duration::from_micros(avg_local_excessive_time_micros as u64).as_secs_f32();
+                (avg_local_excessive_perc, avg_local_excessive_time)
+            };
 
         format!(
             r#"<!DOCTYPE html>
@@ -370,6 +383,26 @@ impl AnalysisReport {
             </div>
         </div>
 
+        <h3 style="margin-top: 30px;">Performance Metrics</h3>
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-label">Upstream Total Elapsed</div>
+                <div class="stat-value">{:.2}s</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Local Total Elapsed</div>
+                <div class="stat-value">{:.2}s</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Avg Local Excessive %</div>
+                <div class="stat-value">{:.2}%</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Avg Local Excessive Time</div>
+                <div class="stat-value">{:.2}s</div>
+            </div>
+        </div>
+
     </div>
 
     <h2>Crate Reports ({})</h2>
@@ -384,6 +417,10 @@ impl AnalysisReport {
             self.num_upstream_successes,
             self.num_upstream_diffs,
             self.num_upstream_failures,
+            self.upstream_total_elapsed.as_secs_f32(),
+            self.local_total_elapsed.as_secs_f32(),
+            avg_local_excessive_perc,
+            avg_local_excessive_time,
             total_reports,
             self.generate_crate_reports_html()
         )

@@ -14,13 +14,21 @@ use tokio::io::AsyncWriteExt;
 pub(crate) struct AnalysisReport {
     #[serde(skip)]
     output: OutputDirs,
+    #[serde(skip)]
+    avg_local_excessive_time_micros: i128,
+    #[serde(skip)]
+    avg_local_excessive_time_perc: f64,
+    #[serde(skip)]
+    excessive_time_measurements: usize,
     num_diverging_diffs: usize,
     num_upstream_failures: usize,
     num_upstream_diffs: usize,
     num_upstream_successes: usize,
+    upstream_total_elapsed: Duration,
     num_local_failures: usize,
     num_local_diffs: usize,
     num_local_successes: usize,
+    local_total_elapsed: Duration,
     crate_reports: Vec<CrateReport>,
 }
 
@@ -93,13 +101,18 @@ impl AnalysisReport {
                 nondiverged,
                 errors,
             },
+            avg_local_excessive_time_micros: 0,
+            avg_local_excessive_time_perc: 0.0,
+            excessive_time_measurements: 0,
             num_diverging_diffs: 0,
             num_upstream_failures: 0,
             num_upstream_diffs: 0,
             num_upstream_successes: 0,
+            upstream_total_elapsed: Duration::default(),
             num_local_failures: 0,
             num_local_diffs: 0,
             num_local_successes: 0,
+            local_total_elapsed: Duration::default(),
             crate_reports: vec![],
         })
     }
@@ -125,6 +138,7 @@ impl AnalysisReport {
         } else {
             false
         };
+        let upstream_elapsed = cr.upstream_rustfmt_analysis.elapsed;
         let upstream_out = create_rustfmt_output(
             &cr.crate_name,
             &self.output,
@@ -137,6 +151,8 @@ impl AnalysisReport {
             &mut self.num_upstream_failures,
         )
         .await;
+
+        let local_elapsed = cr.local_rustfmt_analysis.elapsed;
         let local_out = create_rustfmt_output(
             &cr.crate_name,
             &self.output,
@@ -163,10 +179,23 @@ impl AnalysisReport {
             }
         };
 
-        if cr.diverging_diff.diverged()
-            || !skip_non_diverging_diffs
-            || pre_errors < self.num_local_failures + self.num_upstream_failures
-        {
+        let has_error = pre_errors < self.num_local_failures + self.num_upstream_failures;
+
+        if !has_error {
+            self.excessive_time_measurements += 1;
+            self.local_total_elapsed = self.local_total_elapsed.saturating_add(local_elapsed);
+            self.upstream_total_elapsed =
+                self.upstream_total_elapsed.saturating_add(upstream_elapsed);
+            self.avg_local_excessive_time_micros =
+                self.avg_local_excessive_time_micros.saturating_add(
+                    (local_elapsed.as_micros() as i128)
+                        .saturating_sub(upstream_elapsed.as_micros() as i128),
+                );
+            self.avg_local_excessive_time_perc +=
+                local_elapsed.as_micros() as f64 / upstream_elapsed.as_micros() as f64;
+        }
+
+        if cr.diverging_diff.diverged() || !skip_non_diverging_diffs || has_error {
             self.crate_reports.push(CrateReport::new(
                 cr.crate_name.clone(),
                 cr.local_root.display().to_string(),
