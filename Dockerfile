@@ -3,7 +3,7 @@ FROM rust:1-trixie
 ARG USERID
 ARG GROUPID
 
-RUN mkdir -p /data/workdir && mkdir -p /data/local && mkdir -p /data/upstream && mkdir -p /data/output && rustup component add rustfmt
+RUN mkdir -p /data/workdir && mkdir -p /data/local && mkdir -p /data/upstream && mkdir -p /data/output && rustup component add rustfmt && rustup +stable component add rustfmt
 WORKDIR /app
 RUN chown -R $USERID:$GROUPID /app
 USER $USERID
