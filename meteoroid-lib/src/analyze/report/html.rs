@@ -378,12 +378,12 @@ impl AnalysisReport {
 </html>"#,
             self.num_diverging_diffs,
             total_upstream,
-            self.num_upstream_successes,
-            self.num_upstream_diffs,
-            self.num_upstream_failures,
             self.num_local_successes,
             self.num_local_diffs,
             self.num_local_failures,
+            self.num_upstream_successes,
+            self.num_upstream_diffs,
+            self.num_upstream_failures,
             total_reports,
             self.generate_crate_reports_html()
         )
