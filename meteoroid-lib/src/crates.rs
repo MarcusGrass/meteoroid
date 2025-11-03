@@ -54,7 +54,7 @@ fn response_reader(response: Response) -> AsyncReadShim {
                     }
                     Err(TrySendError::Disconnected(_)) => {
                         tracing::debug!(
-                            "tar response sender closed, aborting read (this could happened because it finished early, or an error)"
+                            "tar response sender closed, aborting read (this could happen because it finished early)"
                         );
                         return;
                     }
