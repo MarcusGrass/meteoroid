@@ -2,7 +2,7 @@ use crate::error::unpack;
 use anyhow::{Context, bail};
 use std::fs::Metadata;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone)]
@@ -95,4 +95,35 @@ fn last_updated(metadata: &Metadata) -> Option<std::time::SystemTime> {
         .ok()
         .or_else(|| metadata.accessed().ok())
         .or_else(|| metadata.created().ok())
+}
+
+pub(crate) async fn has_top_level_cargo_toml(repo_root: &Path) -> anyhow::Result<bool> {
+    let path = repo_root.join("Cargo.toml");
+    tokio::fs::try_exists(&path)
+        .await
+        .with_context(|| format!("failed to check for Cargo.toml at {}", path.display()))
+}
+
+pub(crate) async fn has_rust_toolchain(repo_root: &Path) -> anyhow::Result<bool> {
+    let rust_toolchain_classic = repo_root.join("rust-toolchain");
+    if tokio::fs::try_exists(&rust_toolchain_classic)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to check for rust-toolchain at {}",
+                rust_toolchain_classic.display()
+            )
+        })?
+    {
+        return Ok(true);
+    }
+    let rust_toolchain_toml = repo_root.join("rust-toolchain.toml");
+    tokio::fs::try_exists(&rust_toolchain_toml)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to check for rust-toolchain at {}",
+                rust_toolchain_toml.display()
+            )
+        })
 }

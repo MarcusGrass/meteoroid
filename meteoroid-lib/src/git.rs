@@ -2,7 +2,7 @@ use crate::StopReceiver;
 use crate::cmd::output_string;
 use crate::crates::crate_consumer::default::{GitRepo, PrunedCrate};
 use crate::error::unpack;
-use crate::fs::Workdir;
+use crate::fs::{Workdir, has_rust_toolchain, has_top_level_cargo_toml};
 use anyhow::{Context, bail};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -72,7 +72,12 @@ async fn sync_task(
                 continue;
             }
         }
-        let head_branch = match find_remote_head_branch(&dir, "origin").await {
+        let (head_branch, top_level_cargo_toml, rust_toolchain_toml) = tokio::join!(
+            find_remote_head_branch(&dir, "origin"),
+            has_top_level_cargo_toml(&dir),
+            has_rust_toolchain(&dir)
+        );
+        let head_branch = match head_branch {
             Ok(h) => h,
             Err(e) => {
                 tracing::error!(
@@ -85,6 +90,17 @@ async fn sync_task(
                 continue;
             }
         };
+        if !top_level_cargo_toml? {
+            tracing::warn!("skipping {}, no Cargo.toml at top-level", cr.crate_name);
+            continue;
+        }
+        if rust_toolchain_toml? {
+            tracing::warn!(
+                "skipping {}, has rust-toolchain specified (causes issues)",
+                cr.crate_name
+            );
+            continue;
+        }
         if should_sync && let Err(e) = sync_existing(&dir, &head_branch).await {
             tracing::error!(
                 "failed to sync crate '{}' at {} with source {}: {}",
