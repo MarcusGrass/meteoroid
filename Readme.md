@@ -40,8 +40,20 @@ meteoroid <extra args>
 
 Or use the supplied script at [.local/docker.sh](./.local/docker.sh) (requires `bash`)
 
+Running with remote fetch:
+
 ```shell
 ./.local/docker.sh <your-workdir> <your-local-modified-rustfmt-checkout> <your-upstream-rustfmt-checkout> <your-analysis-output-directory> <extra-args> remote <remote-args>
+```
+
+Running with local crates currently has a potentially bewildering UX where if running with 
+remote fetch it requires the subcommand `remote` to run, while if local is specified with `METEOROID_LOCAL` 
+no sub-command is required, but the script is only for convenience.
+
+Local: 
+
+```shell
+METEOROID_LOCAL=~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ ./.local/docker.sh <your-workdir> <your-local-modified-rustfmt-checkout> <your-upstream-rustfmt-checkout> <your-analysis-output-directory> <extra-args>
 ```
 
 One flaw with the container approach is that even if `target` is mounted, the crate index is re-fetched on each run.
